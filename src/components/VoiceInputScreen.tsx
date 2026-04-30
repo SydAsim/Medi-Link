@@ -276,7 +276,7 @@ export default function VoiceInputScreen() {
               </div>
             ) : (
               <div className="space-y-8">
-                {inputType === 'voice' && isSupported ? (
+                {inputType === 'voice' ? (
                   <div className="flex flex-col items-center space-y-8">
                     <div className="relative flex items-center justify-center">
                       <AnimatePresence>
