@@ -38,7 +38,7 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
   return R * c;
 }
 
-// Initialize Gemini
+// Initialize Core Engine
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 export default function VoiceInputScreen() {
@@ -119,7 +119,7 @@ Respond ONLY with a valid JSON object in this exact format:
   "language": "detected language code"
 }`;
 
-      const geminiResponse = await ai.models.generateContent({
+      const analysisResponse = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: userPrompt,
         config: {
@@ -129,7 +129,7 @@ Respond ONLY with a valid JSON object in this exact format:
         }
       });
 
-      const responseText = geminiResponse.text;
+      const responseText = analysisResponse.text;
       if (!responseText) throw new Error("Empty response from AI");
 
       const triageData = JSON.parse(responseText.trim());
@@ -154,7 +154,7 @@ Respond ONLY with a valid JSON object in this exact format:
     } catch (err: any) {
       console.error("Triage error:", err);
       if (err.message?.includes("API_KEY_INVALID") || err.message?.includes("not configured")) {
-        setError("Gemini API key is not configured or invalid. Please check your AI Studio secrets.");
+        setError("Emergency service connection issue. Please check your internet or configuration.");
       } else {
         setError(err.message || 'Error communicating with AI. Please try again.');
       }
@@ -376,7 +376,7 @@ Respond ONLY with a valid JSON object in this exact format:
                       {selectedLang.code === 'ps-AF' && (
                         <div className="mb-2 flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-600 rounded-full text-[8px] font-bold uppercase tracking-[0.2em] animate-pulse">
                           <Zap size={10} />
-                          AI-Powered Transcription
+                          Neural Voice Analysis
                         </div>
                       )}
                       {transcript ? (
@@ -454,7 +454,7 @@ Respond ONLY with a valid JSON object in this exact format:
 
           <div className="text-center">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.3em]">
-              Powered by MediLink Neural Network
+              Powered by MediLink Response Engine
             </p>
           </div>
         </div>

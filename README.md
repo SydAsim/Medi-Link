@@ -5,7 +5,7 @@ MediLink AI is a production-ready emergency response platform designed for rapid
 ## 🚀 Key Features
 
 - **Multi-Language AI Triage**: Supports **Pashto**, **Urdu**, and **English**.
-- **Voice-to-Relief**: Specialized Pashto audio transcription using Gemini AI for villagers who may not be literate or fluent in English.
+- **Voice-to-Relief**: Specialized Pashto audio transcription for villagers who may not be literate or fluent in English.
 - **NGO Command Center**: Real-time dashboard for NGOs to track, prioritize, and manage disaster reports.
 - **Incident Mapping**: Interactive maps powered by Leaflet to visualize hotspots and prioritize deployments.
 - **Contact & GPS Integration**: Optional contact number and location tracking for precise rescue missions.
@@ -15,7 +15,7 @@ MediLink AI is a production-ready emergency response platform designed for rapid
 
 - **Frontend**: React 19, Vite, Tailwind CSS, Motion (Animation), Leaflet (Mapping)
 - **Backend**: Express.js (Node.js)
-- **AI Engine**: Google Gemini (via `@google/genai`)
+- **Core Engine**: Advanced Triage Analysis System
 - **Database**: Firebase Firestore (Real-time NoSQL)
 - **Auth**: Firebase Authentication
 

@@ -1,6 +1,0 @@
-{
-  "name": "MediLink AI",
-  "description": "A mobile-first medical triage assistant for Pakistan with voice input, AI analysis, and a real-time NGO health monitoring dashboard.",
-  "requestFramePermissions": ["microphone", "geolocation"],
-  "majorCapabilities": []
-}
