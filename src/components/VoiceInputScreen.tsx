@@ -32,18 +32,23 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
 
+// Initialize Gemini
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 export default function VoiceInputScreen() {
   const {
     isRecording,
     transcript,
     audioBlob,
+    isSupported,
+    startBrowserRecognition,
+    stopBrowserRecognition,
     startAudioRecording,
     stopAudioRecording,
     resetTranscript,
@@ -51,7 +56,7 @@ export default function VoiceInputScreen() {
 
   const [selectedLang, setSelectedLang] = useState(LANGUAGES[0]);
   const [inputText, setInputText] = useState('');
-  const [inputType, setInputType] = useState<'voice' | 'text'>('voice');
+  const [inputType, setInputType] = useState<'voice' | 'text'>(isSupported ? 'voice' : 'text');
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,98 +78,166 @@ export default function VoiceInputScreen() {
     }
   }, [isLocationEnabled]);
 
-  const nearestClinicName = location 
-    ? MOCK_CLINICS.reduce((prev, curr) => {
-        const dPrev = getDistance(location.lat, location.lng, prev.latitude, prev.longitude);
-        const dCurr = getDistance(location.lat, location.lng, curr.latitude, curr.longitude);
-        return dCurr < dPrev ? curr : prev;
-      }).name
-    : MOCK_CLINICS[0].name;
-
   const handleSubmit = async (text: string) => {
     if (!text || text.length < 3) return;
+
     setIsLoading(true);
     setError(null);
+
     try {
-      const response = await fetch('/api/triage', {
+      let nearestClinic = MOCK_CLINICS[0].name;
+      if (location) {
+        let minDistance = Infinity;
+        for (const clinic of MOCK_CLINICS) {
+          const d = getDistance(location.lat, location.lng, clinic.latitude, clinic.longitude);
+          if (d < minDistance) {
+            minDistance = d;
+            nearestClinic = clinic.name;
+          }
+        }
+      } else {
+        nearestClinic = MOCK_CLINICS.map(c => c.name).join(" or ");
+      }
+
+      const systemPrompt = "You are a disaster response triage assistant. Analyze the user's situation and categorize it. Respond ONLY with valid JSON.";
+
+      const userPrompt = `Issue/Symptoms: ${text}
+Language of response: ${selectedLang.label}
+Nearest healthcare facility: ${nearestClinic}
+
+Respond ONLY with a valid JSON object in this exact format:
+{
+  "urgencyLevel": "Low" | "Medium" | "High",
+  "issueType": "Medical" | "Rescue" | "Shelter" | "Food" | "Other",
+  "explanation": "One sentence in the user's language explaining the urgency level",
+  "firstSteps": [
+    "Step 1 in the user's language",
+    "Step 2 in the user's language",
+    "Go to ${nearestClinic} or nearest Sehat Card clinic"
+  ],
+  "translatedSummary": "Brief English summary of symptoms for dashboard",
+  "language": "detected language code"
+}`;
+
+      const geminiResponse = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: userPrompt,
+        config: {
+          systemInstruction: systemPrompt,
+          responseMimeType: "application/json",
+          temperature: 0.3,
+        }
+      });
+
+      const responseText = geminiResponse.text;
+      if (!responseText) throw new Error("Empty response from AI");
+
+      const triageData = JSON.parse(responseText.trim());
+      setResult(triageData);
+
+      await fetch('/api/reports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text,
-          language: selectedLang.label,
-          nearestClinic: nearestClinicName,
-          location,
-          phoneNumber
+          symptoms: text,
+          translatedSummary: triageData.translatedSummary,
+          urgencyLevel: triageData.urgencyLevel,
+          issueType: triageData.issueType || "Medical",
+          firstSteps: triageData.firstSteps,
+          language: triageData.language || selectedLang.label,
+          latitude: location?.lat,
+          longitude: location?.lng,
+          phoneNumber: phoneNumber || null,
         }),
       });
 
-      const data = await response.json();
-      if (data.success) {
-        setResult(data.data);
-      } else {
-        throw new Error(data.error || "Triage failed");
-      }
     } catch (err: any) {
-      console.error('Triage error:', err);
-      setError(err.message || 'Failed to process symptoms. Please try again.');
+      console.error("Triage error:", err);
+      if (err.message?.includes("API_KEY_INVALID") || err.message?.includes("not configured")) {
+        setError("Gemini API key is not configured or invalid. Please check your AI Studio secrets.");
+      } else {
+        setError(err.message || 'Error communicating with AI. Please try again.');
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleAudioRecording = async (blob: Blob) => {
+  const handleMicToggle = () => {
+    if (isRecording) {
+      if (selectedLang.code === 'ps-AF') {
+        stopAudioRecording();
+      } else {
+        stopBrowserRecognition();
+        if (transcript.length >= 3) {
+          handleSubmit(transcript);
+        }
+      }
+    } else {
+      if (selectedLang.code === 'ps-AF') {
+        startAudioRecording();
+      } else {
+        startBrowserRecognition(selectedLang.code);
+      }
+    }
+  };
+
+  const handleTranscribeAudio = async (blob: Blob) => {
     setIsLoading(true);
     setError(null);
     try {
-      const reader = new FileReader();
-      reader.readAsDataURL(blob);
-      reader.onloadend = async () => {
-        const base64 = (reader.result as string).split(',')[1];
-        
-        // Unified call to handle everything in one request
-        const response = await fetch('/api/process-audio', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            audioBase64: base64,
-            mimeType: blob.type,
-            language: selectedLang.label,
-            nearestClinic: nearestClinicName,
-            location,
-            phoneNumber
-          }),
-        });
+      const reader = new ArrayBufferReader(blob);
+      const base64 = await reader.toBase64();
 
-        const data = await response.json();
-        
-        if (data.success) {
-          setResult(data.data);
-          resetTranscript();
-        } else {
-          throw new Error(data.error || "Processing failed");
-        }
-      };
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [
+          {
+            text: "Please transcribe this Pashto speech accurately into Pashto text. If there is no speech, return an empty string."
+          },
+          {
+            inlineData: {
+              data: base64,
+              mimeType: "audio/webm"
+            }
+          }
+        ],
+      });
+
+      const transcription = response.text;
+      if (transcription && transcription.trim().length > 2) {
+        handleSubmit(transcription);
+      } else {
+        setError("Could not detect clear speech. Please try again.");
+      }
     } catch (err: any) {
-      console.error('Audio processing error:', err);
-      setError(err.message || 'Failed to process audio. Please try again.');
+      console.error("Transcription error:", err);
+      setError("Failed to transcribe audio. Please try text input.");
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    if (audioBlob) {
-      handleAudioRecording(audioBlob);
+    if (audioBlob && selectedLang.code === 'ps-AF') {
+      handleTranscribeAudio(audioBlob);
     }
   }, [audioBlob]);
 
-  const handleMicToggle = () => {
-    if (isRecording) {
-      stopAudioRecording();
-    } else {
-      startAudioRecording();
+  // Helper inside component or outside
+  class ArrayBufferReader {
+    constructor(private blob: Blob) { }
+    async toBase64(): Promise<string> {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64String = (reader.result as string).split(',')[1];
+          resolve(base64String);
+        };
+        reader.readAsDataURL(this.blob);
+      });
     }
-  };
+  }
 
   const handleReset = () => {
     setResult(null);
@@ -197,7 +270,7 @@ export default function VoiceInputScreen() {
       <div className="absolute bottom-[-10%] left-[-5%] w-[40%] h-[40%] bg-blue-200/30 rounded-full blur-3xl pointer-events-none"></div>
 
       <div className="container max-w-6xl mx-auto px-6 py-12 flex flex-col lg:flex-row items-center gap-12 z-10">
-        
+
         {/* Left Side: Brand & Status (Visible on Desktop) */}
         <div className="flex-1 space-y-8 hidden lg:block">
           <div className="space-y-4">
@@ -205,7 +278,7 @@ export default function VoiceInputScreen() {
               <Zap className="text-white" size={32} strokeWidth={2.5} />
             </div>
             <h1 className="text-6xl font-display font-medium tracking-tight text-slate-900 leading-[0.9]">
-              Instant Relief <br /> 
+              Instant Relief <br />
               <span className="text-blue-600 italic">Response Network</span>
             </h1>
             <p className="text-lg text-slate-500 font-medium max-w-sm">
@@ -247,11 +320,10 @@ export default function VoiceInputScreen() {
                   <button
                     key={lang.code}
                     onClick={() => setSelectedLang(lang)}
-                    className={`px-4 py-2 rounded-xl text-[10px] font-bold transition-all ${
-                      selectedLang.code === lang.code
+                    className={`px-4 py-2 rounded-xl text-[10px] font-bold transition-all ${selectedLang.code === lang.code
                         ? 'bg-blue-600 text-white shadow-lg shadow-blue-200'
                         : 'text-slate-500 hover:bg-white hover:text-slate-700'
-                    }`}
+                      }`}
                   >
                     {lang.name}
                   </button>
@@ -259,14 +331,13 @@ export default function VoiceInputScreen() {
               </div>
 
               <div className="flex items-center space-x-2 pl-3">
-                 <button
-                    onClick={() => setInputType(i => i === 'voice' ? 'text' : 'voice')}
-                    className={`p-2.5 rounded-xl transition-all ${
-                      inputType === 'text' ? 'bg-slate-900 text-white' : 'bg-white text-slate-400 border border-slate-200 hover:text-slate-600'
+                <button
+                  onClick={() => setInputType(i => i === 'voice' ? 'text' : 'voice')}
+                  className={`p-2.5 rounded-xl transition-all ${inputType === 'text' ? 'bg-slate-900 text-white' : 'bg-white text-slate-400 border border-slate-200 hover:text-slate-600'
                     }`}
-                 >
-                    {inputType === 'voice' ? <Send size={16} /> : <Mic size={16} />}
-                 </button>
+                >
+                  {inputType === 'voice' ? <Send size={16} /> : <Mic size={16} />}
+                </button>
               </div>
             </div>
 
@@ -276,7 +347,7 @@ export default function VoiceInputScreen() {
               </div>
             ) : (
               <div className="space-y-8">
-                {inputType === 'voice' ? (
+                {inputType === 'voice' && isSupported ? (
                   <div className="flex flex-col items-center space-y-8">
                     <div className="relative flex items-center justify-center">
                       <AnimatePresence>
@@ -290,20 +361,18 @@ export default function VoiceInputScreen() {
                           />
                         )}
                       </AnimatePresence>
-                      
+
                       <button
                         onClick={handleMicToggle}
-                        className={`relative w-32 h-32 rounded-[3.5rem] flex items-center justify-center transition-all shadow-2xl hover:scale-105 active:scale-95 z-10 ${
-                          isRecording ? 'bg-red-500 shadow-red-200' : 'bg-slate-900 shadow-slate-200'
-                        }`}
+                        className={`relative w-32 h-32 rounded-[3.5rem] flex items-center justify-center transition-all shadow-2xl hover:scale-105 active:scale-95 z-10 ${isRecording ? 'bg-red-500 shadow-red-200' : 'bg-slate-900 shadow-slate-200'
+                          }`}
                       >
                         {isRecording ? <MicOff size={40} className="text-white" /> : <Mic size={40} className="text-white" />}
                       </button>
                     </div>
 
-                    <div className={`w-full p-8 glass rounded-[2.5rem] shadow-xl min-h-[180px] transition-all flex flex-col items-center justify-center text-center group ${
-                      isRecording ? 'border-red-200/50 bg-red-50/10' : 'border-slate-100 hover:border-blue-100'
-                    }`}>
+                    <div className={`w-full p-8 glass rounded-[2.5rem] shadow-xl min-h-[180px] transition-all flex flex-col items-center justify-center text-center group ${isRecording ? 'border-red-200/50 bg-red-50/10' : 'border-slate-100 hover:border-blue-100'
+                      }`}>
                       {selectedLang.code === 'ps-AF' && (
                         <div className="mb-2 flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-600 rounded-full text-[8px] font-bold uppercase tracking-[0.2em] animate-pulse">
                           <Zap size={10} />
@@ -316,7 +385,7 @@ export default function VoiceInputScreen() {
                         </p>
                       ) : (
                         <div className="space-y-4">
-                           <p className="text-slate-400 font-bold uppercase tracking-[0.2em] text-[10px]">
+                          <p className="text-slate-400 font-bold uppercase tracking-[0.2em] text-[10px]">
                             {isRecording ? "Listening to your situation" : "Press and hold to speak"}
                           </p>
                           {!isRecording && (
@@ -352,11 +421,10 @@ export default function VoiceInputScreen() {
                 <div className="space-y-3 pt-4 border-t border-slate-50">
                   <div className="flex justify-between items-center px-4">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Reporter Contact (Optional)</p>
-                    <button 
+                    <button
                       onClick={() => setIsLocationEnabled(prev => !prev)}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest transition-all ${
-                        isLocationEnabled ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400'
-                      }`}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest transition-all ${isLocationEnabled ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400'
+                        }`}
                     >
                       <MapPin size={10} />
                       {isLocationEnabled ? "GPS Active" : "GPS Hidden"}
@@ -374,7 +442,7 @@ export default function VoiceInputScreen() {
             )}
 
             {error && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="text-red-600 text-center text-xs font-bold bg-red-50 border border-red-100 p-5 rounded-3xl"
@@ -383,7 +451,7 @@ export default function VoiceInputScreen() {
               </motion.div>
             )}
           </main>
-          
+
           <div className="text-center">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.3em]">
               Powered by MediLink Neural Network
@@ -404,7 +472,7 @@ export default function VoiceInputScreen() {
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Khyber Pakhtunkhwa Grid</span>
           </div>
         </div>
-        
+
         <div className="mt-4 md:mt-0 flex items-center space-x-2 px-4 py-2 bg-blue-50/50 rounded-full text-blue-600 border border-blue-100">
           <HelpCircle size={14} />
           <span className="text-[10px] font-bold uppercase tracking-widest leading-none">Emergency Guide</span>
