@@ -38,17 +38,12 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
   return R * c;
 }
 
-// Initialize Gemini
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 export default function VoiceInputScreen() {
   const {
     isRecording,
     transcript,
     audioBlob,
-    isSupported,
-    startBrowserRecognition,
-    stopBrowserRecognition,
     startAudioRecording,
     stopAudioRecording,
     resetTranscript,
@@ -56,7 +51,7 @@ export default function VoiceInputScreen() {
 
   const [selectedLang, setSelectedLang] = useState(LANGUAGES[0]);
   const [inputText, setInputText] = useState('');
-  const [inputType, setInputType] = useState<'voice' | 'text'>(isSupported ? 'voice' : 'text');
+  const [inputType, setInputType] = useState<'voice' | 'text'>('voice');
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -78,166 +73,98 @@ export default function VoiceInputScreen() {
     }
   }, [isLocationEnabled]);
 
+  const nearestClinicName = location 
+    ? MOCK_CLINICS.reduce((prev, curr) => {
+        const dPrev = getDistance(location.lat, location.lng, prev.latitude, prev.longitude);
+        const dCurr = getDistance(location.lat, location.lng, curr.latitude, curr.longitude);
+        return dCurr < dPrev ? curr : prev;
+      }).name
+    : MOCK_CLINICS[0].name;
+
   const handleSubmit = async (text: string) => {
     if (!text || text.length < 3) return;
-
     setIsLoading(true);
     setError(null);
-
     try {
-      let nearestClinic = MOCK_CLINICS[0].name;
-      if (location) {
-        let minDistance = Infinity;
-        for (const clinic of MOCK_CLINICS) {
-          const d = getDistance(location.lat, location.lng, clinic.latitude, clinic.longitude);
-          if (d < minDistance) {
-            minDistance = d;
-            nearestClinic = clinic.name;
-          }
-        }
-      } else {
-        nearestClinic = MOCK_CLINICS.map(c => c.name).join(" or ");
-      }
-
-      const systemPrompt = "You are a disaster response triage assistant. Analyze the user's situation and categorize it. Respond ONLY with valid JSON.";
-      
-      const userPrompt = `Issue/Symptoms: ${text}
-Language of response: ${selectedLang.label}
-Nearest healthcare facility: ${nearestClinic}
-
-Respond ONLY with a valid JSON object in this exact format:
-{
-  "urgencyLevel": "Low" | "Medium" | "High",
-  "issueType": "Medical" | "Rescue" | "Shelter" | "Food" | "Other",
-  "explanation": "One sentence in the user's language explaining the urgency level",
-  "firstSteps": [
-    "Step 1 in the user's language",
-    "Step 2 in the user's language",
-    "Go to ${nearestClinic} or nearest Sehat Card clinic"
-  ],
-  "translatedSummary": "Brief English summary of symptoms for dashboard",
-  "language": "detected language code"
-}`;
-
-      const geminiResponse = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: userPrompt,
-        config: {
-          systemInstruction: systemPrompt,
-          responseMimeType: "application/json",
-          temperature: 0.3,
-        }
-      });
-
-      const responseText = geminiResponse.text;
-      if (!responseText) throw new Error("Empty response from AI");
-      
-      const triageData = JSON.parse(responseText.trim());
-      setResult(triageData);
-
-      await fetch('/api/reports', {
+      const response = await fetch('/api/triage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          symptoms: text,
-          translatedSummary: triageData.translatedSummary,
-          urgencyLevel: triageData.urgencyLevel,
-          issueType: triageData.issueType || "Medical",
-          firstSteps: triageData.firstSteps,
-          language: triageData.language || selectedLang.label,
-          latitude: location?.lat,
-          longitude: location?.lng,
-          phoneNumber: phoneNumber || null,
+          text,
+          language: selectedLang.label,
+          nearestClinic: nearestClinicName,
+          location,
+          phoneNumber
         }),
       });
 
-    } catch (err: any) {
-      console.error("Triage error:", err);
-      if (err.message?.includes("API_KEY_INVALID") || err.message?.includes("not configured")) {
-        setError("Gemini API key is not configured or invalid. Please check your AI Studio secrets.");
+      const data = await response.json();
+      if (data.success) {
+        setResult(data.data);
       } else {
-        setError(err.message || 'Error communicating with AI. Please try again.');
+        throw new Error(data.error || "Triage failed");
       }
+    } catch (err: any) {
+      console.error('Triage error:', err);
+      setError(err.message || 'Failed to process symptoms. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleMicToggle = () => {
-    if (isRecording) {
-      if (selectedLang.code === 'ps-AF') {
-        stopAudioRecording();
-      } else {
-        stopBrowserRecognition();
-        if (transcript.length >= 3) {
-          handleSubmit(transcript);
-        }
-      }
-    } else {
-      if (selectedLang.code === 'ps-AF') {
-        startAudioRecording();
-      } else {
-        startBrowserRecognition(selectedLang.code);
-      }
-    }
-  };
-
-  const handleTranscribeAudio = async (blob: Blob) => {
+  const handleAudioRecording = async (blob: Blob) => {
     setIsLoading(true);
     setError(null);
     try {
-      const reader = new ArrayBufferReader(blob);
-      const base64 = await reader.toBase64();
+      const reader = new FileReader();
+      reader.readAsDataURL(blob);
+      reader.onloadend = async () => {
+        const base64 = (reader.result as string).split(',')[1];
+        
+        // Unified call to handle everything in one request
+        const response = await fetch('/api/process-audio', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            audioBase64: base64,
+            mimeType: blob.type,
+            language: selectedLang.label,
+            nearestClinic: nearestClinicName,
+            location,
+            phoneNumber
+          }),
+        });
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [
-          {
-            text: "Please transcribe this Pashto speech accurately into Pashto text. If there is no speech, return an empty string."
-          },
-          {
-            inlineData: {
-              data: base64,
-              mimeType: "audio/webm"
-            }
-          }
-        ],
-      });
-
-      const transcription = response.text;
-      if (transcription && transcription.trim().length > 2) {
-        handleSubmit(transcription);
-      } else {
-        setError("Could not detect clear speech. Please try again.");
-      }
+        const data = await response.json();
+        
+        if (data.success) {
+          setResult(data.data);
+          resetTranscript();
+        } else {
+          throw new Error(data.error || "Processing failed");
+        }
+      };
     } catch (err: any) {
-      console.error("Transcription error:", err);
-      setError("Failed to transcribe audio. Please try text input.");
+      console.error('Audio processing error:', err);
+      setError(err.message || 'Failed to process audio. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    if (audioBlob && selectedLang.code === 'ps-AF') {
-      handleTranscribeAudio(audioBlob);
+    if (audioBlob) {
+      handleAudioRecording(audioBlob);
     }
   }, [audioBlob]);
 
-  // Helper inside component or outside
-  class ArrayBufferReader {
-    constructor(private blob: Blob) {}
-    async toBase64(): Promise<string> {
-      return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64String = (reader.result as string).split(',')[1];
-          resolve(base64String);
-        };
-        reader.readAsDataURL(this.blob);
-      });
+  const handleMicToggle = () => {
+    if (isRecording) {
+      stopAudioRecording();
+    } else {
+      startAudioRecording();
     }
-  }
+  };
 
   const handleReset = () => {
     setResult(null);

@@ -32,31 +32,108 @@ async function startServer() {
 
   app.use(express.json({ limit: '10mb' }));
 
-  // AI Triage Endpoint
+  // Helper to sanitize AI JSON responses
+  const sanitizeJSON = (text: string) => {
+    return text.replace(/```json/g, "").replace(/```/g, "").trim();
+  };
+
+  // Unified Process Audio Endpoint (Transcription + Triage + Save)
+  app.post("/api/process-audio", async (req, res) => {
+    const { audioBase64, mimeType, language, nearestClinic, location, phoneNumber } = req.body;
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
+    
+    console.log(`[ProcessAudio] Received voice request (${language})`);
+
+    try {
+      // 1. Transcribe
+      const cleanMimeType = (mimeType || "audio/webm").split(';')[0];
+      const transResponse = await fetch(
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: `Transcribe this ${language} speech accurately. Return ONLY text.` },
+                { inlineData: { data: audioBase64, mimeType: cleanMimeType } }
+              ]
+            }]
+          })
+        }
+      );
+      const transData: any = await transResponse.json();
+      const transcription = transData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      
+      if (!transcription || transcription.length < 2) {
+        throw new Error("Could not understand the audio.");
+      }
+
+      console.log(`[ProcessAudio] Transcribed: "${transcription}"`);
+
+      // 2. Triage
+      const triagePrompt = `Issue/Symptoms: ${transcription}
+Language: ${language}
+Clinic: ${nearestClinic}
+
+Respond ONLY with JSON:
+{
+  "urgencyLevel": "Low" | "Medium" | "High",
+  "issueType": "Medical" | "Rescue" | "Shelter" | "Food" | "Other",
+  "explanation": "One sentence in ${language} explaining urgency",
+  "firstSteps": ["Step 1", "Step 2", "Go to ${nearestClinic}"],
+  "translatedSummary": "English summary",
+  "language": "code"
+}`;
+
+      const triageResponse = await fetch(
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: triagePrompt }] }],
+            systemInstruction: { parts: [{ text: "You are a disaster response triage assistant. Respond ONLY with valid JSON." }] },
+            generationConfig: { responseMimeType: "application/json", temperature: 0.3 }
+          })
+        }
+      );
+
+      const triageJsonData: any = await triageResponse.json();
+      const triageRawText = triageJsonData.candidates?.[0]?.content?.parts?.[0]?.text;
+      const triageData = JSON.parse(sanitizeJSON(triageRawText));
+
+      // 3. Save
+      const newReport = {
+        id: Math.random().toString(36).substring(2, 15),
+        symptoms: transcription,
+        ...triageData,
+        latitude: location?.lat || null,
+        longitude: location?.lng || null,
+        phoneNumber: phoneNumber || null,
+        createdAt: new Date()
+      };
+      
+      reports.unshift(newReport);
+      console.log(`[ProcessAudio] Success! Report saved and sent to mobile.`);
+      
+      res.json({ success: true, data: triageData, transcription });
+    } catch (error: any) {
+      console.error("[ProcessAudio] Error:", error.message);
+      res.status(500).json({ success: false, error: error.message || "Processing failed" });
+    }
+  });
+
+  // Keep Text-only Triage Endpoint
   app.post("/api/triage", async (req, res) => {
     const { text, language, nearestClinic, location, phoneNumber } = req.body;
     const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
     
-    console.log(`[Triage] Processing request for language: ${language}`);
-
     try {
-      const prompt = `Issue/Symptoms: ${text}
-Language of response: ${language}
-Nearest healthcare facility: ${nearestClinic}
-
-Respond ONLY with a valid JSON object in this exact format:
-{
-  "urgencyLevel": "Low" | "Medium" | "High",
-  "issueType": "Medical" | "Rescue" | "Shelter" | "Food" | "Other",
-  "explanation": "One sentence in the user's language explaining the urgency level",
-  "firstSteps": [
-    "Step 1 in the user's language",
-    "Step 2 in the user's language",
-    "Go to ${nearestClinic} or nearest Sehat Card clinic"
-  ],
-  "translatedSummary": "Brief English summary of symptoms for dashboard",
-  "language": "detected language code"
-}`;
+      const triagePrompt = `Symptoms: ${text}
+Language: ${language}
+Clinic: ${nearestClinic}
+Respond ONLY with JSON.`;
 
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
@@ -64,22 +141,16 @@ Respond ONLY with a valid JSON object in this exact format:
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            systemInstruction: { parts: [{ text: "You are a disaster response triage assistant. Analyze the user's situation and categorize it. Respond ONLY with valid JSON." }] },
+            contents: [{ parts: [{ text: triagePrompt }] }],
+            systemInstruction: { parts: [{ text: "You are a disaster response triage assistant. Respond ONLY with valid JSON." }] },
             generationConfig: { responseMimeType: "application/json", temperature: 0.3 }
           })
         }
       );
 
       const data: any = await response.json();
-      
-      if (!response.ok) {
-        console.error("[Triage] Google API Error:", JSON.stringify(data, null, 2));
-        throw new Error(data.error?.message || "Google API Error");
-      }
-
-      const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      const triageData = JSON.parse(responseText);
+      const triageRawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const triageData = JSON.parse(sanitizeJSON(triageRawText));
       
       const newReport = {
         id: Math.random().toString(36).substring(2, 15),
@@ -92,52 +163,9 @@ Respond ONLY with a valid JSON object in this exact format:
       };
       
       reports.unshift(newReport);
-      res.json({ success: true, data: triageData, id: newReport.id });
+      res.json({ success: true, data: triageData });
     } catch (error: any) {
-      console.error("[Triage] Error:", error.message);
-      res.status(500).json({ success: false, error: error.message || "AI Triage failed" });
-    }
-  });
-
-  // AI Transcription Endpoint
-  app.post("/api/transcribe", async (req, res) => {
-    const { audioBase64, mimeType, language } = req.body;
-    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
-    
-    console.log(`[Transcription] Received request. Type: ${mimeType}`);
-
-    try {
-      const cleanMimeType = (mimeType || "audio/webm").split(';')[0];
-      
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: `Transcribe this ${language} speech into text accurately. Return ONLY the transcription, nothing else. If you hear nothing, return an empty string.` },
-                { inlineData: { data: audioBase64, mimeType: cleanMimeType } }
-              ]
-            }]
-          })
-        }
-      );
-
-      const data: any = await response.json();
-
-      if (!response.ok) {
-        console.error("[Transcription] Google API Error:", JSON.stringify(data, null, 2));
-        throw new Error(data.error?.message || "Google API Error");
-      }
-
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      console.log(`[Transcription] Success! Result: "${text}"`);
-      res.json({ success: true, transcription: text });
-    } catch (error: any) {
-      console.error("[Transcription] Error:", error.message);
-      res.status(500).json({ success: false, error: error.message || "Transcription failed" });
+      res.status(500).json({ success: false, error: error.message });
     }
   });
 
