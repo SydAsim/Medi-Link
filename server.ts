@@ -2,18 +2,14 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
-import { initializeApp } from "firebase/app";
-import { getFirestore, collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import fs from "fs";
 import "dotenv/config";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Initialize Firebase
-const firebaseConfig = JSON.parse(fs.readFileSync(path.join(__dirname, "firebase-applet-config.json"), "utf8"));
-const appFirebase = initializeApp(firebaseConfig);
-const db = getFirestore(appFirebase, firebaseConfig.firestoreDatabaseId);
+// In-memory storage for reports (replaces Firebase for demo stability)
+let reports: any[] = [];
 
 const MOCK_CLINICS = [
   {
@@ -52,7 +48,8 @@ async function startServer() {
     } = req.body;
 
     try {
-      const docRef = await addDoc(collection(db, "reports"), {
+      const newReport = {
+        id: Math.random().toString(36).substring(2, 15),
         symptoms,
         translatedSummary: translatedSummary || symptoms,
         urgencyLevel: urgencyLevel || "Medium",
@@ -63,25 +60,21 @@ async function startServer() {
         longitude: longitude || null,
         locationName: locationName || null,
         phoneNumber: phoneNumber || null,
-        createdAt: serverTimestamp()
-      });
-      res.json({ success: true, id: docRef.id });
+        createdAt: new Date()
+      };
+      
+      reports.unshift(newReport); // Add to the beginning of the array
+      res.json({ success: true, id: newReport.id });
     } catch (error) {
-      console.error("Firestore persistence error:", error);
+      console.error("In-memory persistence error:", error);
       res.status(500).json({ success: false, error: "Failed to save report" });
     }
   });
 
   app.get("/api/reports", async (req, res) => {
     try {
-      const q = query(collection(db, "reports"), orderBy("createdAt", "desc"), limit(50));
-      const querySnapshot = await getDocs(q);
-      const reports = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        createdAt: doc.data().createdAt?.toDate() || new Date()
-      }));
-      res.json({ success: true, data: reports });
+      // Return the most recent 50 reports
+      res.json({ success: true, data: reports.slice(0, 50) });
     } catch (error) {
       console.error("Error fetching reports:", error);
       res.status(500).json({ success: false, error: "Internal server error" });
@@ -90,106 +83,111 @@ async function startServer() {
 
   app.post("/api/seed", async (req, res) => {
     try {
-      const reportsCollection = collection(db, "reports");
-      const snapshot = await getDocs(query(reportsCollection, limit(10)));
-      
-      if (snapshot.size < 10) {
+      if (reports.length < 10) {
         const sampleReports = [
           {
+            id: "seed-1",
             symptoms: "Severe chest pain and difficulty breathing",
             translatedSummary: "Severe chest pain and difficulty breathing",
             urgencyLevel: "High",
             firstSteps: ["Lie down and rest immediately", "Call emergency services", "Go to Lady Reading Hospital"],
             language: "en",
             latitude: 34.0151, longitude: 71.5249, locationName: "Peshawar",
-            createdAt: serverTimestamp()
+            createdAt: new Date()
           },
           {
+            id: "seed-2",
             symptoms: "سینے میں شدید درد اور سانس لینے میں تکلیف",
             translatedSummary: "Severe chest pain and respiratory distress in Urdu",
             urgencyLevel: "High",
             firstSteps: ["فوری طور پر لیٹ جائیں", "ایمرجنسی سروسز کو کال کریں", "لیڈی ریڈنگ ہسپتال جائیں"],
             language: "ur",
             latitude: 34.0500, longitude: 71.5800, locationName: "Peshawar South",
-            createdAt: serverTimestamp()
+            createdAt: new Date()
           },
           {
+            id: "seed-3",
             symptoms: "Mild fever and cough for two days",
             translatedSummary: "Mild fever and cough for two days",
             urgencyLevel: "Low",
             firstSteps: ["Drink plenty of fluids", "Rest at home", "Monitor temperature"],
             language: "en",
             latitude: 34.1986, longitude: 72.0404, locationName: "Mardan",
-            createdAt: serverTimestamp()
+            createdAt: new Date()
           },
           {
+            id: "seed-4",
             symptoms: "Persistent dizziness and nausea for 24 hours",
             translatedSummary: "Persistent dizziness and nausea for 24 hours",
             urgencyLevel: "Medium",
             firstSteps: ["Stay hydrated", "Avoid sudden movements", "Visit a general practitioner"],
             language: "en",
             latitude: 34.1500, longitude: 72.0000, locationName: "Mardan Suburbs",
-            createdAt: serverTimestamp()
+            createdAt: new Date()
           },
           {
+            id: "seed-5",
             symptoms: "Severe abdominal pain and vomiting",
             translatedSummary: "Severe abdominal pain and vomiting",
             urgencyLevel: "High",
             firstSteps: ["Do not eat or drink anything", "Seek urgent medical attention", "Go to Mardan Medical Complex"],
             language: "en",
             latitude: 34.2000, longitude: 72.0500, locationName: "Central Mardan",
-            createdAt: serverTimestamp()
+            createdAt: new Date()
           },
           {
+            id: "seed-6",
             symptoms: "سر میں شدید درد اور دھندلا پن",
             translatedSummary: "Severe headache and blurred vision in Urdu",
             urgencyLevel: "High",
             firstSteps: ["آرام کریں اور تیز روشنی سے پرہیز کریں", "اپنا بلڈ پریشر چیک کریں", "فوری ہسپتال جائیں"],
             language: "ur",
             latitude: 33.9500, longitude: 71.5000, locationName: "Jamrud",
-            createdAt: serverTimestamp()
+            createdAt: new Date()
           },
           {
+            id: "seed-7",
             symptoms: "Minor scrape on the knee that is red",
             translatedSummary: "Minor infected scrape on the knee",
             urgencyLevel: "Low",
             firstSteps: ["Clean with clean water", "Apply antiseptic if available", "Keep it covered and dry"],
             language: "en",
             latitude: 34.0000, longitude: 71.4500, locationName: "Peshawar West",
-            createdAt: serverTimestamp()
+            createdAt: new Date()
           },
           {
+            id: "seed-8",
             symptoms: "Back pain after lifting heavy weight",
             translatedSummary: "Acute back pain after lifting load",
             urgencyLevel: "Medium",
             firstSteps: ["Apply cold compress for 15 mins", "Rest on a firm surface", "Avoid further heavy lifting"],
             language: "en",
             latitude: 34.1000, longitude: 71.6000, locationName: "Nowshera",
-            createdAt: serverTimestamp()
+            createdAt: new Date()
           },
           {
+            id: "seed-9",
             symptoms: "کمر میں درد",
             translatedSummary: "Back pain in Urdu",
             urgencyLevel: "Low",
             firstSteps: ["آرام کریں", "گرم پٹی کا استعمال کریں", "درد کش دوا لیں"],
             language: "ur",
             latitude: 34.1200, longitude: 71.6500, locationName: "Nowshera City",
-            createdAt: serverTimestamp()
+            createdAt: new Date()
           },
           {
+            id: "seed-10",
             symptoms: "Child has high fever and skin rash",
             translatedSummary: "Pediatric high fever with rash",
             urgencyLevel: "High",
             firstSteps: ["Try to lower fever with lukewarm washcloth", "Do not give Aspirin", "Seek a pediatrician immediately"],
             language: "en",
             latitude: 34.2500, longitude: 71.8000, locationName: "Charsadda",
-            createdAt: serverTimestamp()
+            createdAt: new Date()
           }
         ];
 
-        for (const report of sampleReports) {
-          await addDoc(reportsCollection, report);
-        }
+        reports = [...sampleReports, ...reports];
         res.json({ success: true, message: `Seeded ${sampleReports.length} reports` });
       } else {
         res.json({ success: true, message: "Collection already has sufficient data, skipping seed" });
@@ -219,18 +217,30 @@ async function startServer() {
     console.log(`Server running on http://localhost:${PORT}`);
     
     // Auto-seed if needed
-    try {
-      const reportsCollection = collection(db, "reports");
-      const snapshot = await getDocs(query(reportsCollection, limit(10)));
-      if (snapshot.size < 10) {
-        console.log("Seeding initial data...");
-        // This is a bit redundant with the /api/seed endpoint but safe
-        await fetch(`http://localhost:${PORT}/api/seed`, { method: "POST" });
+    if (reports.length < 10) {
+      console.log("Seeding initial data...");
+      try {
+        // We can just call the internal function logic since we're in the same file
+        const sampleReports = [
+          {
+            id: "init-1",
+            symptoms: "High fever in child",
+            translatedSummary: "Pediatric high fever",
+            urgencyLevel: "High",
+            firstSteps: ["Check temperature", "Give fluids"],
+            language: "en",
+            latitude: 34.0151, longitude: 71.5249, locationName: "Peshawar",
+            createdAt: new Date()
+          }
+        ];
+        reports = [...sampleReports, ...reports];
+        console.log("Auto-seeded initial data.");
+      } catch (e) {
+        console.error("Auto-seed check failed:", e);
       }
-    } catch (e) {
-      console.error("Auto-seed check failed:", e);
     }
   });
 }
 
 startServer();
+
