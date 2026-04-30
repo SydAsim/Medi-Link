@@ -1,0 +1,57 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll(['symptoms', 'translatedSummary', 'urgencyLevel', 'firstSteps', 'language', 'createdAt'])
+        && data.keys().size() >= 6
+        && data.symptoms is string && data.symptoms.size() >= 3 && data.symptoms.size() <= 2000
+        && data.translatedSummary is string && data.translatedSummary.size() <= 1000
+        && data.urgencyLevel in ['Low', 'Medium', 'High']
+        && data.firstSteps is list && data.firstSteps.size() > 0
+        && data.language is string && data.language.size() <= 10
+        && data.createdAt == request.time
+        && (data.latitude == null || data.latitude is number)
+        && (data.longitude == null || data.longitude is number);
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reports collection
+    match /reports/{reportId} {
+      // Villagers can create reports without signing in
+      allow create: if isValidReport(incoming());
+      
+      // Dashboard needs to read reports. For demo purposes, we allow anyone to read.
+      // In production, we would restrict this to NGO workers.
+      allow read: if true;
+    }
+
+    // Clinics collection
+    match /clinics/{clinicId} {
+      // Publicly readable
+      allow read: if true;
+      // Only admins should write, but for this demo clinics are pre-seeded or managed via console
+      allow write: if false;
+    }
+  }
+}
