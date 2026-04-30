@@ -30,19 +30,128 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
+
+  // AI Triage Endpoint
+  app.post("/api/triage", async (req, res) => {
+    const { text, language, nearestClinic, location, phoneNumber } = req.body;
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
+    
+    console.log(`[Triage] Processing request for language: ${language}`);
+
+    try {
+      const prompt = `Issue/Symptoms: ${text}
+Language of response: ${language}
+Nearest healthcare facility: ${nearestClinic}
+
+Respond ONLY with a valid JSON object in this exact format:
+{
+  "urgencyLevel": "Low" | "Medium" | "High",
+  "issueType": "Medical" | "Rescue" | "Shelter" | "Food" | "Other",
+  "explanation": "One sentence in the user's language explaining the urgency level",
+  "firstSteps": [
+    "Step 1 in the user's language",
+    "Step 2 in the user's language",
+    "Go to ${nearestClinic} or nearest Sehat Card clinic"
+  ],
+  "translatedSummary": "Brief English summary of symptoms for dashboard",
+  "language": "detected language code"
+}`;
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            systemInstruction: { parts: [{ text: "You are a disaster response triage assistant. Analyze the user's situation and categorize it. Respond ONLY with valid JSON." }] },
+            generationConfig: { responseMimeType: "application/json", temperature: 0.3 }
+          })
+        }
+      );
+
+      const data: any = await response.json();
+      
+      if (!response.ok) {
+        console.error("[Triage] Google API Error:", JSON.stringify(data, null, 2));
+        throw new Error(data.error?.message || "Google API Error");
+      }
+
+      const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const triageData = JSON.parse(responseText);
+      
+      const newReport = {
+        id: Math.random().toString(36).substring(2, 15),
+        symptoms: text,
+        ...triageData,
+        latitude: location?.lat || null,
+        longitude: location?.lng || null,
+        phoneNumber: phoneNumber || null,
+        createdAt: new Date()
+      };
+      
+      reports.unshift(newReport);
+      res.json({ success: true, data: triageData, id: newReport.id });
+    } catch (error: any) {
+      console.error("[Triage] Error:", error.message);
+      res.status(500).json({ success: false, error: error.message || "AI Triage failed" });
+    }
+  });
+
+  // AI Transcription Endpoint
+  app.post("/api/transcribe", async (req, res) => {
+    const { audioBase64, mimeType, language } = req.body;
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
+    
+    console.log(`[Transcription] Received request. Type: ${mimeType}`);
+
+    try {
+      const cleanMimeType = (mimeType || "audio/webm").split(';')[0];
+      
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: `Transcribe this ${language} speech into text accurately. Return ONLY the transcription, nothing else. If you hear nothing, return an empty string.` },
+                { inlineData: { data: audioBase64, mimeType: cleanMimeType } }
+              ]
+            }]
+          })
+        }
+      );
+
+      const data: any = await response.json();
+
+      if (!response.ok) {
+        console.error("[Transcription] Google API Error:", JSON.stringify(data, null, 2));
+        throw new Error(data.error?.message || "Google API Error");
+      }
+
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      console.log(`[Transcription] Success! Result: "${text}"`);
+      res.json({ success: true, transcription: text });
+    } catch (error: any) {
+      console.error("[Transcription] Error:", error.message);
+      res.status(500).json({ success: false, error: error.message || "Transcription failed" });
+    }
+  });
 
   // API Routes
   app.post("/api/reports", async (req, res) => {
-    const { 
-      symptoms, 
-      translatedSummary, 
-      urgencyLevel, 
+    const {
+      symptoms,
+      translatedSummary,
+      urgencyLevel,
       issueType,
-      firstSteps, 
-      language, 
-      latitude, 
-      longitude, 
+      firstSteps,
+      language,
+      latitude,
+      longitude,
       locationName,
       phoneNumber
     } = req.body;
@@ -62,8 +171,8 @@ async function startServer() {
         phoneNumber: phoneNumber || null,
         createdAt: new Date()
       };
-      
-      reports.unshift(newReport); // Add to the beginning of the array
+
+      reports.unshift(newReport);
       res.json({ success: true, id: newReport.id });
     } catch (error) {
       console.error("In-memory persistence error:", error);
@@ -73,7 +182,6 @@ async function startServer() {
 
   app.get("/api/reports", async (req, res) => {
     try {
-      // Return the most recent 50 reports
       res.json({ success: true, data: reports.slice(0, 50) });
     } catch (error) {
       console.error("Error fetching reports:", error);
@@ -83,118 +191,26 @@ async function startServer() {
 
   app.post("/api/seed", async (req, res) => {
     try {
-      if (reports.length < 10) {
+      if (reports.length < 5) {
         const sampleReports = [
           {
             id: "seed-1",
-            symptoms: "Severe chest pain and difficulty breathing",
-            translatedSummary: "Severe chest pain and difficulty breathing",
+            symptoms: "Severe chest pain",
+            translatedSummary: "Chest pain",
             urgencyLevel: "High",
-            firstSteps: ["Lie down and rest immediately", "Call emergency services", "Go to Lady Reading Hospital"],
+            firstSteps: ["Rest", "Call 1122"],
             language: "en",
             latitude: 34.0151, longitude: 71.5249, locationName: "Peshawar",
             createdAt: new Date()
-          },
-          {
-            id: "seed-2",
-            symptoms: "سینے میں شدید درد اور سانس لینے میں تکلیف",
-            translatedSummary: "Severe chest pain and respiratory distress in Urdu",
-            urgencyLevel: "High",
-            firstSteps: ["فوری طور پر لیٹ جائیں", "ایمرجنسی سروسز کو کال کریں", "لیڈی ریڈنگ ہسپتال جائیں"],
-            language: "ur",
-            latitude: 34.0500, longitude: 71.5800, locationName: "Peshawar South",
-            createdAt: new Date()
-          },
-          {
-            id: "seed-3",
-            symptoms: "Mild fever and cough for two days",
-            translatedSummary: "Mild fever and cough for two days",
-            urgencyLevel: "Low",
-            firstSteps: ["Drink plenty of fluids", "Rest at home", "Monitor temperature"],
-            language: "en",
-            latitude: 34.1986, longitude: 72.0404, locationName: "Mardan",
-            createdAt: new Date()
-          },
-          {
-            id: "seed-4",
-            symptoms: "Persistent dizziness and nausea for 24 hours",
-            translatedSummary: "Persistent dizziness and nausea for 24 hours",
-            urgencyLevel: "Medium",
-            firstSteps: ["Stay hydrated", "Avoid sudden movements", "Visit a general practitioner"],
-            language: "en",
-            latitude: 34.1500, longitude: 72.0000, locationName: "Mardan Suburbs",
-            createdAt: new Date()
-          },
-          {
-            id: "seed-5",
-            symptoms: "Severe abdominal pain and vomiting",
-            translatedSummary: "Severe abdominal pain and vomiting",
-            urgencyLevel: "High",
-            firstSteps: ["Do not eat or drink anything", "Seek urgent medical attention", "Go to Mardan Medical Complex"],
-            language: "en",
-            latitude: 34.2000, longitude: 72.0500, locationName: "Central Mardan",
-            createdAt: new Date()
-          },
-          {
-            id: "seed-6",
-            symptoms: "سر میں شدید درد اور دھندلا پن",
-            translatedSummary: "Severe headache and blurred vision in Urdu",
-            urgencyLevel: "High",
-            firstSteps: ["آرام کریں اور تیز روشنی سے پرہیز کریں", "اپنا بلڈ پریشر چیک کریں", "فوری ہسپتال جائیں"],
-            language: "ur",
-            latitude: 33.9500, longitude: 71.5000, locationName: "Jamrud",
-            createdAt: new Date()
-          },
-          {
-            id: "seed-7",
-            symptoms: "Minor scrape on the knee that is red",
-            translatedSummary: "Minor infected scrape on the knee",
-            urgencyLevel: "Low",
-            firstSteps: ["Clean with clean water", "Apply antiseptic if available", "Keep it covered and dry"],
-            language: "en",
-            latitude: 34.0000, longitude: 71.4500, locationName: "Peshawar West",
-            createdAt: new Date()
-          },
-          {
-            id: "seed-8",
-            symptoms: "Back pain after lifting heavy weight",
-            translatedSummary: "Acute back pain after lifting load",
-            urgencyLevel: "Medium",
-            firstSteps: ["Apply cold compress for 15 mins", "Rest on a firm surface", "Avoid further heavy lifting"],
-            language: "en",
-            latitude: 34.1000, longitude: 71.6000, locationName: "Nowshera",
-            createdAt: new Date()
-          },
-          {
-            id: "seed-9",
-            symptoms: "کمر میں درد",
-            translatedSummary: "Back pain in Urdu",
-            urgencyLevel: "Low",
-            firstSteps: ["آرام کریں", "گرم پٹی کا استعمال کریں", "درد کش دوا لیں"],
-            language: "ur",
-            latitude: 34.1200, longitude: 71.6500, locationName: "Nowshera City",
-            createdAt: new Date()
-          },
-          {
-            id: "seed-10",
-            symptoms: "Child has high fever and skin rash",
-            translatedSummary: "Pediatric high fever with rash",
-            urgencyLevel: "High",
-            firstSteps: ["Try to lower fever with lukewarm washcloth", "Do not give Aspirin", "Seek a pediatrician immediately"],
-            language: "en",
-            latitude: 34.2500, longitude: 71.8000, locationName: "Charsadda",
-            createdAt: new Date()
           }
         ];
-
         reports = [...sampleReports, ...reports];
-        res.json({ success: true, message: `Seeded ${sampleReports.length} reports` });
+        res.json({ success: true, message: `Seeded reports` });
       } else {
-        res.json({ success: true, message: "Collection already has sufficient data, skipping seed" });
+        res.json({ success: true, message: "Skipping seed" });
       }
     } catch (error) {
-      console.error("Seed error:", error);
-      res.status(500).json({ success: false, error: "Internal server error during seeding" });
+      res.status(500).json({ success: false, error: "Seed failed" });
     }
   });
 
@@ -215,32 +231,9 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", async () => {
     console.log(`Server running on http://localhost:${PORT}`);
-    
-    // Auto-seed if needed
-    if (reports.length < 10) {
-      console.log("Seeding initial data...");
-      try {
-        // We can just call the internal function logic since we're in the same file
-        const sampleReports = [
-          {
-            id: "init-1",
-            symptoms: "High fever in child",
-            translatedSummary: "Pediatric high fever",
-            urgencyLevel: "High",
-            firstSteps: ["Check temperature", "Give fluids"],
-            language: "en",
-            latitude: 34.0151, longitude: 71.5249, locationName: "Peshawar",
-            createdAt: new Date()
-          }
-        ];
-        reports = [...sampleReports, ...reports];
-        console.log("Auto-seeded initial data.");
-      } catch (e) {
-        console.error("Auto-seed check failed:", e);
-      }
-    }
   });
 }
 
 startServer();
+
 
