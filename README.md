@@ -8,58 +8,41 @@ MediLink AI is a production-ready emergency response platform designed for rapid
 - **Voice-to-Relief**: Specialized Pashto audio transcription for villagers who may not be literate or fluent in English.
 - **NGO Command Center**: Real-time dashboard for NGOs to track, prioritize, and manage disaster reports.
 - **Incident Mapping**: Interactive maps powered by Leaflet to visualize hotspots and prioritize deployments.
-- **Contact & GPS Integration**: Optional contact number and location tracking for precise rescue missions.
-- **Priority Scoring**: Automatic urgency detection (Low, Medium, High) to focus resources where they are needed most.
+- **Priority Scoring**: Automatic urgency detection (Low, Medium, High) powered by Gemini 1.5 Flash.
+- **In-Memory Stability**: High-performance backend designed for reliable demo environments without external database latency.
 
 ## 🛠 Tech Stack
 
-- **Frontend**: React 19, Vite, Tailwind CSS, Motion (Animation), Leaflet (Mapping)
+- **Frontend**: React 19, Vite, Tailwind CSS, Framer Motion (Animation), Leaflet (Mapping)
 - **Backend**: Express.js (Node.js)
-- **Core Engine**: Advanced Triage Analysis System
-- **Database**: Firebase Firestore (Real-time NoSQL)
-- **Auth**: Firebase Authentication
+- **AI Engine**: Google Gemini 1.5 Flash (Transcription & Analysis)
+- **Deployment**: Local Node.js / Vercel / Railway
 
 ## 💻 Local Development Setup
 
 ### 1. Prerequisites
-- Node.js (v20 or higher recommended)
+- Node.js (v20 or higher)
 - npm or yarn
-- A Google Cloud Project with the **Gemini API** enabled
-- A Firebase Project
+- A Google Cloud API Key for **Gemini AI**
 
 ### 2. Installation
 ```bash
-# Clone the repository
-# cd into the project directory
+# Navigate to the project directory
+cd Medi-Link
+
+# Install dependencies
 npm install
 ```
 
-### 3. Firebase Configuration
-1. Go to the [Firebase Console](https://console.firebase.google.com/).
-2. Create a new project.
-3. Enable **Cloud Firestore** and **Authentication** (Google or Anonymous).
-4. Create a file named `firebase-applet-config.json` in the root directory with the following structure:
-```json
-{
-  "apiKey": "YOUR_API_KEY",
-  "authDomain": "YOUR_PROJECT_ID.firebaseapp.com",
-  "projectId": "YOUR_PROJECT_ID",
-  "storageBucket": "YOUR_PROJECT_ID.appspot.com",
-  "messagingSenderId": "YOUR_SENDER_ID",
-  "appId": "YOUR_APP_ID",
-  "firestoreDatabaseId": "(default)"
-}
-```
-
-### 4. Environment Variables
+### 3. Environment Variables
 Create a `.env` file in the root directory and add your Gemini API key:
 ```env
 GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
-### 5. Running the Application
+### 4. Running the Application
 ```bash
-# Start the development server
+# Start the development server (Backend + Frontend via Vite)
 npm run dev
 ```
 The application will be available at `http://localhost:3000`.
@@ -67,17 +50,15 @@ The application will be available at `http://localhost:3000`.
 ## 📂 Project Structure
 
 - `/src/components`: UI components (Voice Terminal, NGO Dashboard, Mapping).
-- `/src/hooks`: Custom React hooks (Speech recognition, real-time data).
-- `/src/utils`: Helper functions for styling and urgency logic.
-- `/server.ts`: Express server handling API routes and serving the client app.
-- `/firebase-blueprint.json`: Data structure definition for Firestore.
-- `/firestore.rules`: Security rules for database protection.
+- `/src/hooks`: Custom React hooks for speech and data management.
+- `/src/utils`: Helper functions for styling and triage logic.
+- `/server.ts`: Unified Express server handling AI routes and serving the frontend.
+- `/public`: Static assets and icons.
 
-## 🛡 Security
-The platform implements strict Firestore security rules to ensure that:
-- Reporters can create but not modify general data.
-- NGOs can manage status and assign responders.
-- PII (Phone numbers) is handled with care within the triage workflows.
+## 🛡 Security & Reliability
+- **Direct API Integration**: Uses official Google Generative AI endpoints for secure, low-latency processing.
+- **Data Privacy**: No persistent personal data is stored beyond the session for maximum patient privacy during triage.
+- **Responsive Design**: Fully optimized for mobile devices used in the field.
 
 ## 📄 License
 MIT License - Created for Humanitarian Relief Efforts.
