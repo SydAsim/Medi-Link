@@ -5,10 +5,12 @@ import MapComponent from './MapComponent';
 import CaseList from './CaseList';
 import CaseDetail from './CaseDetail';
 import LoadingState from './LoadingState';
-import { RefreshCcw } from 'lucide-react';
+import { RefreshCcw, ArrowLeft } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function NGODashboard() {
+  const navigate = useNavigate();
   const { reports, isLoading, error, refetch } = useTriageReports();
   const [selectedCase, setSelectedCase] = useState<any>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
@@ -48,15 +50,25 @@ export default function NGODashboard() {
 
       {/* Header */}
       <header className="max-w-[1200px] mx-auto w-full flex items-center justify-between mb-8 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-200">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
-            </svg>
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">MediLink AI</h1>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-blue-600 opacity-80">Khyber Pakhtunkhwa Regional Triage</p>
+        <div className="flex items-center gap-8">
+          <button 
+            onClick={() => navigate('/')}
+            className="p-2 hover:bg-white rounded-full transition-all text-slate-400 hover:text-blue-600 cursor-pointer"
+            title="Back to Villager App"
+          >
+            <ArrowLeft size={20} />
+          </button>
+          
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-200">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
+              </svg>
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900">MediLink AI</h1>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-blue-600 opacity-80">Khyber Pakhtunkhwa Regional Triage</p>
+            </div>
           </div>
         </div>
         

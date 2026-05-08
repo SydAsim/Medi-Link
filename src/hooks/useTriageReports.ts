@@ -24,7 +24,7 @@ export const useTriageReports = () => {
 
   useEffect(() => {
     fetchReports();
-    const interval = setInterval(fetchReports, 30000);
+    const interval = setInterval(fetchReports, 10000);
     return () => clearInterval(interval);
   }, [fetchReports]);
 

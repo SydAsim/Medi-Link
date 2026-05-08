@@ -77,7 +77,7 @@ export const useSpeechRecognition = () => {
 
       mediaRecorder.start();
       setIsRecording(true);
-      setTranscript('Processing your voice report...');
+      setTranscript('Recording audio for AI transcription...');
 
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       timeoutRef.current = setTimeout(() => {

@@ -2,14 +2,18 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import fs from "fs";
 import "dotenv/config";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// In-memory storage for reports (replaces Firebase for demo stability)
-let reports: any[] = [];
+// Initialize Firebase
+const firebaseConfig = JSON.parse(fs.readFileSync(path.join(__dirname, "firebase-applet-config.json"), "utf8"));
+const appFirebase = initializeApp(firebaseConfig);
+const db = getFirestore(appFirebase, firebaseConfig.firestoreDatabaseId);
 
 const MOCK_CLINICS = [
   {
@@ -32,133 +36,26 @@ async function startServer() {
 
   app.use(express.json({ limit: '10mb' }));
 
-  // AI Triage Endpoint
-  app.post("/api/triage", async (req, res) => {
-    const { text, language, nearestClinic, location, phoneNumber } = req.body;
-    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
-
-    console.log(`[Triage] Processing request for language: ${language}`);
-
-    try {
-      const prompt = `Issue/Symptoms: ${text}
-Language of response: ${language}
-Nearest healthcare facility: ${nearestClinic}
-
-Respond ONLY with a valid JSON object in this exact format:
-{
-  "urgencyLevel": "Low" | "Medium" | "High",
-  "issueType": "Medical" | "Rescue" | "Shelter" | "Food" | "Other",
-  "explanation": "One sentence in the user's language explaining the urgency level",
-  "firstSteps": [
-    "Step 1 in the user's language",
-    "Step 2 in the user's language",
-    "Go to ${nearestClinic} or nearest Sehat Card clinic"
-  ],
-  "translatedSummary": "Brief English summary of symptoms for dashboard",
-  "language": "detected language code"
-}`;
-
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            systemInstruction: { parts: [{ text: "You are a disaster response triage assistant. Analyze the user's situation and categorize it. Respond ONLY with valid JSON." }] },
-            generationConfig: { responseMimeType: "application/json", temperature: 0.3 }
-          })
-        }
-      );
-
-      const data: any = await response.json();
-
-      if (!response.ok) {
-        console.error("[Triage] Google API Error:", JSON.stringify(data, null, 2));
-        throw new Error(data.error?.message || "Google API Error");
-      }
-
-      const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      const triageData = JSON.parse(responseText);
-
-      const newReport = {
-        id: Math.random().toString(36).substring(2, 15),
-        symptoms: text,
-        ...triageData,
-        latitude: location?.lat || null,
-        longitude: location?.lng || null,
-        phoneNumber: phoneNumber || null,
-        createdAt: new Date()
-      };
-
-      reports.unshift(newReport);
-      res.json({ success: true, data: triageData, id: newReport.id });
-    } catch (error: any) {
-      console.error("[Triage] Error:", error.message);
-      res.status(500).json({ success: false, error: error.message || "AI Triage failed" });
-    }
-  });
-
-  // AI Transcription Endpoint
-  app.post("/api/transcribe", async (req, res) => {
-    const { audioBase64, mimeType, language } = req.body;
-    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
-
-    console.log(`[Transcription] Received request. Type: ${mimeType}`);
-
-    try {
-      const cleanMimeType = (mimeType || "audio/webm").split(';')[0];
-
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: `Transcribe this ${language} speech into text accurately. Return ONLY the transcription, nothing else. If you hear nothing, return an empty string.` },
-                { inlineData: { data: audioBase64, mimeType: cleanMimeType } }
-              ]
-            }]
-          })
-        }
-      );
-
-      const data: any = await response.json();
-
-      if (!response.ok) {
-        console.error("[Transcription] Google API Error:", JSON.stringify(data, null, 2));
-        throw new Error(data.error?.message || "Google API Error");
-      }
-
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      console.log(`[Transcription] Success! Result: "${text}"`);
-      res.json({ success: true, transcription: text });
-    } catch (error: any) {
-      console.error("[Transcription] Error:", error.message);
-      res.status(500).json({ success: false, error: error.message || "Transcription failed" });
-    }
-  });
-
   // API Routes
   app.post("/api/reports", async (req, res) => {
-    const {
-      symptoms,
-      translatedSummary,
-      urgencyLevel,
+    console.log("Received report request. Body size approximates:", JSON.stringify(req.body).length);
+    const { 
+      symptoms, 
+      translatedSummary, 
+      urgencyLevel, 
       issueType,
-      firstSteps,
-      language,
-      latitude,
-      longitude,
+      firstSteps, 
+      language, 
+      latitude, 
+      longitude, 
       locationName,
-      phoneNumber
+      phoneNumber,
+      imageUrl
     } = req.body;
 
     try {
-      const newReport = {
-        id: Math.random().toString(36).substring(2, 15),
+      console.log("Attempting to save to Firestore...");
+      const docRef = await addDoc(collection(db, "reports"), {
         symptoms,
         translatedSummary: translatedSummary || symptoms,
         urgencyLevel: urgencyLevel || "Medium",
@@ -169,20 +66,27 @@ Respond ONLY with a valid JSON object in this exact format:
         longitude: longitude || null,
         locationName: locationName || null,
         phoneNumber: phoneNumber || null,
-        createdAt: new Date()
-      };
-
-      reports.unshift(newReport);
-      res.json({ success: true, id: newReport.id });
+        imageUrl: imageUrl || null,
+        createdAt: serverTimestamp()
+      });
+      console.log("Report saved successfully with ID:", docRef.id);
+      res.json({ success: true, id: docRef.id });
     } catch (error) {
-      console.error("In-memory persistence error:", error);
-      res.status(500).json({ success: false, error: "Failed to save report" });
+      console.error("Firestore persistence error details:", error);
+      res.status(500).json({ success: false, error: "Failed to save report: " + (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
   app.get("/api/reports", async (req, res) => {
     try {
-      res.json({ success: true, data: reports.slice(0, 50) });
+      const q = query(collection(db, "reports"), orderBy("createdAt", "desc"), limit(50));
+      const querySnapshot = await getDocs(q);
+      const reports = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        createdAt: doc.data().createdAt?.toDate() || new Date()
+      }));
+      res.json({ success: true, data: reports });
     } catch (error) {
       console.error("Error fetching reports:", error);
       res.status(500).json({ success: false, error: "Internal server error" });
@@ -191,26 +95,113 @@ Respond ONLY with a valid JSON object in this exact format:
 
   app.post("/api/seed", async (req, res) => {
     try {
-      if (reports.length < 5) {
+      const reportsCollection = collection(db, "reports");
+      const snapshot = await getDocs(query(reportsCollection, limit(10)));
+      
+      if (snapshot.size < 10) {
         const sampleReports = [
           {
-            id: "seed-1",
-            symptoms: "Severe chest pain",
-            translatedSummary: "Chest pain",
+            symptoms: "Severe chest pain and difficulty breathing",
+            translatedSummary: "Severe chest pain and difficulty breathing",
             urgencyLevel: "High",
-            firstSteps: ["Rest", "Call 1122"],
+            firstSteps: ["Lie down and rest immediately", "Call emergency services", "Go to Lady Reading Hospital"],
             language: "en",
             latitude: 34.0151, longitude: 71.5249, locationName: "Peshawar",
-            createdAt: new Date()
+            createdAt: serverTimestamp()
+          },
+          {
+            symptoms: "سینے میں شدید درد اور سانس لینے میں تکلیف",
+            translatedSummary: "Severe chest pain and respiratory distress in Urdu",
+            urgencyLevel: "High",
+            firstSteps: ["فوری طور پر لیٹ جائیں", "ایمرجنسی سروسز کو کال کریں", "لیڈی ریڈنگ ہسپتال جائیں"],
+            language: "ur",
+            latitude: 34.0500, longitude: 71.5800, locationName: "Peshawar South",
+            createdAt: serverTimestamp()
+          },
+          {
+            symptoms: "Mild fever and cough for two days",
+            translatedSummary: "Mild fever and cough for two days",
+            urgencyLevel: "Low",
+            firstSteps: ["Drink plenty of fluids", "Rest at home", "Monitor temperature"],
+            language: "en",
+            latitude: 34.1986, longitude: 72.0404, locationName: "Mardan",
+            createdAt: serverTimestamp()
+          },
+          {
+            symptoms: "Persistent dizziness and nausea for 24 hours",
+            translatedSummary: "Persistent dizziness and nausea for 24 hours",
+            urgencyLevel: "Medium",
+            firstSteps: ["Stay hydrated", "Avoid sudden movements", "Visit a general practitioner"],
+            language: "en",
+            latitude: 34.1500, longitude: 72.0000, locationName: "Mardan Suburbs",
+            createdAt: serverTimestamp()
+          },
+          {
+            symptoms: "Severe abdominal pain and vomiting",
+            translatedSummary: "Severe abdominal pain and vomiting",
+            urgencyLevel: "High",
+            firstSteps: ["Do not eat or drink anything", "Seek urgent medical attention", "Go to Mardan Medical Complex"],
+            language: "en",
+            latitude: 34.2000, longitude: 72.0500, locationName: "Central Mardan",
+            createdAt: serverTimestamp()
+          },
+          {
+            symptoms: "سر میں شدید درد اور دھندلا پن",
+            translatedSummary: "Severe headache and blurred vision in Urdu",
+            urgencyLevel: "High",
+            firstSteps: ["آرام کریں اور تیز روشنی سے پرہیز کریں", "اپنا بلڈ پریشر چیک کریں", "فوری ہسپتال جائیں"],
+            language: "ur",
+            latitude: 33.9500, longitude: 71.5000, locationName: "Jamrud",
+            createdAt: serverTimestamp()
+          },
+          {
+            symptoms: "Minor scrape on the knee that is red",
+            translatedSummary: "Minor infected scrape on the knee",
+            urgencyLevel: "Low",
+            firstSteps: ["Clean with clean water", "Apply antiseptic if available", "Keep it covered and dry"],
+            language: "en",
+            latitude: 34.0000, longitude: 71.4500, locationName: "Peshawar West",
+            createdAt: serverTimestamp()
+          },
+          {
+            symptoms: "Back pain after lifting heavy weight",
+            translatedSummary: "Acute back pain after lifting load",
+            urgencyLevel: "Medium",
+            firstSteps: ["Apply cold compress for 15 mins", "Rest on a firm surface", "Avoid further heavy lifting"],
+            language: "en",
+            latitude: 34.1000, longitude: 71.6000, locationName: "Nowshera",
+            createdAt: serverTimestamp()
+          },
+          {
+            symptoms: "کمر میں درد",
+            translatedSummary: "Back pain in Urdu",
+            urgencyLevel: "Low",
+            firstSteps: ["آرام کریں", "گرم پٹی کا استعمال کریں", "درد کش دوا لیں"],
+            language: "ur",
+            latitude: 34.1200, longitude: 71.6500, locationName: "Nowshera City",
+            createdAt: serverTimestamp()
+          },
+          {
+            symptoms: "Child has high fever and skin rash",
+            translatedSummary: "Pediatric high fever with rash",
+            urgencyLevel: "High",
+            firstSteps: ["Try to lower fever with lukewarm washcloth", "Do not give Aspirin", "Seek a pediatrician immediately"],
+            language: "en",
+            latitude: 34.2500, longitude: 71.8000, locationName: "Charsadda",
+            createdAt: serverTimestamp()
           }
         ];
-        reports = [...sampleReports, ...reports];
-        res.json({ success: true, message: `Seeded reports` });
+
+        for (const report of sampleReports) {
+          await addDoc(reportsCollection, report);
+        }
+        res.json({ success: true, message: `Seeded ${sampleReports.length} reports` });
       } else {
-        res.json({ success: true, message: "Skipping seed" });
+        res.json({ success: true, message: "Collection already has sufficient data, skipping seed" });
       }
     } catch (error) {
-      res.status(500).json({ success: false, error: "Seed failed" });
+      console.error("Seed error:", error);
+      res.status(500).json({ success: false, error: "Internal server error during seeding" });
     }
   });
 
@@ -231,9 +222,20 @@ Respond ONLY with a valid JSON object in this exact format:
 
   app.listen(PORT, "0.0.0.0", async () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    
+    // Auto-seed if needed
+    try {
+      const reportsCollection = collection(db, "reports");
+      const snapshot = await getDocs(query(reportsCollection, limit(10)));
+      if (snapshot.size < 10) {
+        console.log("Seeding initial data...");
+        // This is a bit redundant with the /api/seed endpoint but safe
+        await fetch(`http://localhost:${PORT}/api/seed`, { method: "POST" });
+      }
+    } catch (e) {
+      console.error("Auto-seed check failed:", e);
+    }
   });
 }
 
 startServer();
-
-

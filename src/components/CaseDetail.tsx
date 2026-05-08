@@ -47,6 +47,11 @@ export default function CaseDetail({ report, onClose, onTrack }: CaseDetailProps
           </div>
 
           <div className="space-y-4">
+            {report.imageUrl && (
+              <div className="w-full aspect-video rounded-2xl overflow-hidden shadow-lg border border-slate-100">
+                <img src={report.imageUrl} alt="Incident" className="w-full h-full object-cover" />
+              </div>
+            )}
             <div className="space-y-2">
               <h4 className="text-[10px] font-bold uppercase tracking-widest text-blue-600">User Situation</h4>
               <p className="text-sm font-bold text-slate-800 leading-relaxed italic">
